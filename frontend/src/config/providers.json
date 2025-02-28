@@ -1,0 +1,29 @@
+{
+  "providers": {
+    "gpt": {
+      "displayName": "GPT",
+      "providerIconKey": "openai"
+    },
+    "claude": {
+      "displayName": "Claude",
+      "providerIconKey": "anthropic"
+    },
+    "gemini": {
+      "displayName": "Gemini",
+      "providerIconKey": "gemini"
+    },
+    "example": {
+      "displayName": "Example",
+      "providerIconKey": "default"
+    },
+    "perplexity": {
+      "displayName": "Perplexity",
+      "providerIconKey": "default"
+    },
+    "groq": {
+      "displayName": "Groq",
+      "providerIconKey": "default"
+    }
+  },
+  "defaultProvider": "gpt"
+}

@@ -1,0 +1,33 @@
+# python 
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pyw
+*.pyz
+
+# env
+.env
+
+# venv
+venv/
+
+# logs/*.log and logs/*.txt
+logs/*.log
+logs/*.txt
+logs/*.log.*
+
+# Debug logs
+logs/debug.log
+logs/debug.log.*
+
+# ide
+.idea/
+.vscode/
+
+# pytest and Coverage.py files
+.pytest_cache/
+.coverage/
+.coverage
+coverage.xml
+htmlcov/
