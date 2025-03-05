@@ -15,6 +15,8 @@ from configuration import (
 )
 from providers import ProviderFactory
 from prompt_engineering import get_system_prompt
+from constants import SSEFormat
+import uuid
 
 # Initialize all providers
 ProviderFactory.initialize_all_providers()
@@ -63,7 +65,7 @@ async def stream_response(request: ChatRequest, provider: str) -> AsyncGenerator
             yield chunk
             
             # Check if the stream is done
-            if chunk == "data: [DONE]\n\n":
+            if chunk == SSEFormat.DONE_MESSAGE:
                 stream_duration = time.time() - stream_start
                 debug_with_context(logger,
                     f"Stream completed for {provider}",

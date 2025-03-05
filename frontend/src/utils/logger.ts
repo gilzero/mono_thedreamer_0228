@@ -2,6 +2,7 @@
 // fileoverview: Advanced logging utility for the application
 import * as FileSystem from 'expo-file-system';
 import * as Sentry from '@sentry/react-native';
+import { Platform } from 'react-native';
 
 // Define log levels
 export enum LogLevel {
@@ -37,6 +38,8 @@ const LOG_CONFIG = {
   LOG_DIR: 'logs',
   CURRENT_LEVEL: __DEV__ ? LogLevel.DEBUG : LogLevel.INFO,
   SENTRY_MIN_LEVEL: __DEV__ ? LogLevel.ERROR : LogLevel.WARN, // Only send ERROR and WARN to Sentry in production
+  // Disable file logging in Expo Go to avoid permission errors
+  DISABLE_FILE_LOGGING: __DEV__ && Platform.OS === 'ios',
 };
 
 // Log file paths
@@ -55,6 +58,9 @@ class LogRotator {
   }
 
   async ensureLogDirectoryExists(): Promise<void> {
+    // Skip if file logging is disabled
+    if (LOG_CONFIG.DISABLE_FILE_LOGGING) return;
+    
     try {
       const dirInfo = await FileSystem.getInfoAsync(this.logDir);
       if (!dirInfo.exists) {
@@ -71,6 +77,9 @@ class LogRotator {
   }
 
   async rotateLogIfNeeded(logFile: string): Promise<void> {
+    // Skip if file logging is disabled
+    if (LOG_CONFIG.DISABLE_FILE_LOGGING) return;
+    
     try {
       const fileInfo = await FileSystem.getInfoAsync(logFile);
       
@@ -100,6 +109,9 @@ class LogRotator {
   }
 
   async cleanupOldLogs(baseLogFile: string): Promise<void> {
+    // Skip if file logging is disabled
+    if (LOG_CONFIG.DISABLE_FILE_LOGGING) return;
+    
     try {
       // Get all files in the log directory
       const dirContents = await FileSystem.readDirectoryAsync(this.logDir);
@@ -145,6 +157,12 @@ class Logger {
 
   private async init(): Promise<void> {
     try {
+      // Skip file-based initialization if file logging is disabled
+      if (LOG_CONFIG.DISABLE_FILE_LOGGING) {
+        this.initialized = true;
+        return;
+      }
+      
       const documentDirectory = FileSystem.documentDirectory;
       if (!documentDirectory) {
         console.error('Document directory not available');
@@ -160,7 +178,7 @@ class Logger {
   }
 
   private async writeToLog(level: LogLevel, message: string, meta?: any): Promise<void> {
-    if (!this.initialized || !this.rotator) {
+    if (!this.initialized) {
       // If not initialized yet, queue the log or retry
       setTimeout(() => this.writeToLog(level, message, meta), 100);
       return;
@@ -171,13 +189,35 @@ class Logger {
       return;
     }
 
-    try {
-      // Format the log entry
-      const timestamp = new Date().toISOString();
-      const levelName = LOG_LEVEL_NAMES[level];
-      const metaStr = meta && Object.keys(meta).length > 0 ? ` ${JSON.stringify(meta)}` : '';
-      const logEntry = `${timestamp} ${levelName}: ${message}${metaStr}\n`;
+    // Format the log entry for console output
+    const timestamp = new Date().toISOString();
+    const levelName = LOG_LEVEL_NAMES[level];
+    const metaStr = meta && Object.keys(meta).length > 0 ? ` ${JSON.stringify(meta)}` : '';
+    const logEntry = `${timestamp} ${levelName}: ${message}${metaStr}`;
+    
+    // Always log to console
+    if (level === LogLevel.ERROR) {
+      console.error(logEntry);
+    } else if (level === LogLevel.WARN) {
+      console.warn(logEntry);
+    } else {
+      console.log(logEntry);
+    }
+    
+    // Send to Sentry if appropriate
+    if (level <= LOG_CONFIG.SENTRY_MIN_LEVEL) {
+      Sentry.captureMessage(message, {
+        level: SENTRY_LEVEL_MAP[level] as Sentry.SeverityLevel,
+        extra: meta,
+      });
+    }
+    
+    // Skip file logging if disabled
+    if (LOG_CONFIG.DISABLE_FILE_LOGGING || !this.rotator) {
+      return;
+    }
 
+    try {
       // Determine which log file to write to
       let logFile: string;
       if (level === LogLevel.ERROR) {
@@ -191,47 +231,29 @@ class Logger {
       // Check if log needs rotation
       await this.rotator.rotateLogIfNeeded(logFile);
 
-      // Read existing content
-      const existingContent = await FileSystem.readAsStringAsync(logFile, {
-        encoding: FileSystem.EncodingType.UTF8
-      });
+      // Add newline for file storage
+      const fileLogEntry = logEntry + '\n';
+      
+      // Try to read existing content
+      let existingContent = '';
+      try {
+        existingContent = await FileSystem.readAsStringAsync(logFile, {
+          encoding: FileSystem.EncodingType.UTF8
+        });
+      } catch (error) {
+        // File might not exist yet, which is fine
+      }
 
       // Concatenate new log entry
-      const updatedContent = existingContent + logEntry;
-
-      // Write combined content back to the file
+      const updatedContent = existingContent + fileLogEntry;
+      
+      // Write to file
       await FileSystem.writeAsStringAsync(logFile, updatedContent, {
         encoding: FileSystem.EncodingType.UTF8
       });
-
-      // Send to Sentry if level is at or above the minimum Sentry level
-      if (level <= LOG_CONFIG.SENTRY_MIN_LEVEL) {
-        const sentryLevel = SENTRY_LEVEL_MAP[level];
-        Sentry.addBreadcrumb({
-          category: 'log',
-          message: message,
-          level: sentryLevel as any,
-          data: meta
-        });
-      }
-
-      // Also log to console in development
-      if (__DEV__) {
-        const hasValidMeta = meta && typeof meta === 'object' && Object.keys(meta).length > 0;
-        
-        switch (level) {
-          case LogLevel.ERROR:
-            hasValidMeta ? console.error(message, meta) : console.error(message);
-            break;
-          case LogLevel.WARN:
-            hasValidMeta ? console.warn(message, meta) : console.warn(message);
-            break;
-          default:
-            hasValidMeta ? console.log(`[${levelName}] ${message}`, meta) : console.log(`[${levelName}] ${message}`);
-        }
-      }
     } catch (error) {
-      console.error('Failed to write to log:', error);
+      // If file operations fail, just log to console and don't throw
+      console.error(`Failed to write to log file: ${error}`);
     }
   }
 

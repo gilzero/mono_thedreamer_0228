@@ -5,6 +5,7 @@ import json
 import time
 from fastapi import HTTPException
 from models import ConversationMessage
+from constants import SSEFormat
 
 class BaseProvider(ABC):
     """Base class for all AI providers."""
@@ -41,11 +42,11 @@ class BaseProvider(ABC):
                 "model": model
             }
         }
-        return f"data: {json.dumps(data)}\n\n"
+        return SSEFormat.format_data(json.dumps(data))
     
     def format_done_message(self) -> str:
         """Format the done message for SSE."""
-        return "data: [DONE]\n\n"
+        return SSEFormat.DONE_MESSAGE
     
     async def try_with_models(self, messages: List[ConversationMessage], message_id: str) -> AsyncGenerator[str, None]:
         """Try to get a response using default model, then fallback if needed."""

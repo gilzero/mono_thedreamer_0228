@@ -1,0 +1,11 @@
+# ide
+*.idea
+
+# vscode
+.vscode
+
+# cursor
+.cursorrules
+
+# macos
+.DS_Store

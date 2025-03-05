@@ -1,5 +1,3 @@
-
-
 **Frontend API Response Specification for Streaming Chat**
 
 **1. Introduction**
@@ -159,7 +157,8 @@ def chat(provider):
                 time.sleep(0.5)  # Simulate delay
                 yield f"data: {json.dumps({'id': message_id, 'delta': {'content': chunk}})}\n\n"
 
-            yield "data: [DONE]\n\n"
+            # Use SSEFormat.DONE_MESSAGE from constants.py
+            yield "data: [DONE]\n\n"  # This would be SSEFormat.DONE_MESSAGE in the actual code
 
         except Exception as e:
             yield f"data: {json.dumps({'error': str(e)})}\n\n"
