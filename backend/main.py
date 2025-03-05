@@ -1,5 +1,5 @@
 # filepath: main.py
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -21,6 +21,8 @@ import uuid
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp
 from datetime import datetime, timezone
+import supabase_client
+import json
 
 # Request ID middleware
 class RequestIDMiddleware(BaseHTTPMiddleware):
@@ -229,9 +231,24 @@ async def trigger_error():
     division_by_zero = 1 / 0
     return {"message": "This will never be returned"}
 
+# Initialize Supabase
+@app.on_event("startup")
+async def startup_db_client():
+    """Initialize the Supabase client on startup."""
+    try:
+        success = await supabase_client.init_db()
+        if success:
+            logger.info("Supabase client initialized successfully")
+        else:
+            logger.warning("Supabase client initialization had issues - check logs")
+    except Exception as e:
+        logger.error(f"Failed to initialize Supabase client: {str(e)}")
+        if SENTRY_DSN:
+            sentry_sdk.capture_exception(e)
+
 # Chat endpoint
 @app.post("/chat/{provider}")
-async def chat(provider: str, request: ChatRequest):
+async def chat(provider: str, request: ChatRequest, client_request: Request):
     """Stream chat responses from an AI provider"""
     debug_with_context(logger,
         "Chat endpoint called",
@@ -263,8 +280,71 @@ async def chat(provider: str, request: ChatRequest):
             first_message_role=request.messages[0].role if request.messages else None
         )
 
+        # Generate conversation ID
+        conversation_id = str(uuid.uuid4())
+        
+        # Log conversation start in Supabase
+        client_info = {
+            "ip": client_request.client.host if client_request.client else "unknown",
+            "user_agent": client_request.headers.get("user-agent", "unknown"),
+            "origin": client_request.headers.get("origin", "unknown")
+        }
+        
+        await supabase_client.log_conversation_start(
+            conversation_id=conversation_id,
+            provider=provider,
+            request_id=get_request_id(),
+            client_info=client_info,
+            metadata={
+                "message_count": len(request.messages),
+                "first_message_role": request.messages[0].role if request.messages else None
+            }
+        )
+        
+        # Log user message
+        if request.messages:
+            user_message = next((m for m in reversed(request.messages) if m.role == "user"), None)
+            if user_message:
+                await supabase_client.log_message(
+                    conversation_id=conversation_id,
+                    role="user",
+                    content=user_message.content,
+                    model=None
+                )
+
+        # Create streaming response
+        async def wrapped_stream_response():
+            response_content = ""
+            async for chunk in stream_response(request, provider, conversation_id):
+                # Accumulate response content
+                if not chunk.startswith("data: [DONE]") and chunk.startswith("data: "):
+                    try:
+                        # Extract content from SSE format
+                        json_str = chunk[6:].strip()  # Remove "data: " prefix
+                        if json_str:
+                            data = json.loads(json_str)
+                            if "delta" in data and "content" in data["delta"]:
+                                response_content += data["delta"]["content"]
+                    except Exception as e:
+                        logger.error(f"Error parsing chunk: {str(e)}")
+                
+                # Forward chunk to client
+                yield chunk
+            
+            # Log assistant message at the end of the stream
+            if response_content:
+                await supabase_client.log_message(
+                    conversation_id=conversation_id,
+                    role="assistant",
+                    content=response_content,
+                    model=PROVIDER_SETTINGS[provider].get("default_model", "unknown")
+                )
+            
+            # Log conversation end
+            await supabase_client.log_conversation_end(conversation_id)
+
         response = StreamingResponse(
-            stream_response(request, provider),
+            wrapped_stream_response(),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
@@ -277,7 +357,8 @@ async def chat(provider: str, request: ChatRequest):
         debug_with_context(logger,
             "Chat stream response initialized",
             init_duration=f"{init_duration:.3f}s",
-            provider=provider
+            provider=provider,
+            conversation_id=conversation_id
         )
         return response
 
@@ -292,6 +373,72 @@ async def chat(provider: str, request: ChatRequest):
             })
             sentry_sdk.capture_exception(e)
         raise HTTPException(status_code=500, detail=f"Chat error with {provider}: {str(e)}")
+
+# Add conversation history endpoints
+@app.get("/conversations")
+async def get_conversations(limit: int = 10, offset: int = 0):
+    """Get recent conversations"""
+    try:
+        conversations = await supabase_client.get_recent_conversations(limit, offset)
+        return {"conversations": conversations, "count": len(conversations)}
+    except Exception as e:
+        logger.error(f"Error retrieving conversations: {str(e)}")
+        if SENTRY_DSN:
+            sentry_sdk.capture_exception(e)
+        raise HTTPException(status_code=500, detail=f"Error retrieving conversations: {str(e)}")
+
+@app.get("/conversations/{conversation_id}")
+async def get_conversation(conversation_id: str):
+    """Get a specific conversation with all messages"""
+    try:
+        conversation, messages = await supabase_client.get_conversation(conversation_id)
+        if not conversation:
+            raise HTTPException(status_code=404, detail=f"Conversation {conversation_id} not found")
+        
+        return {
+            "conversation": conversation,
+            "messages": messages
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error retrieving conversation {conversation_id}: {str(e)}")
+        if SENTRY_DSN:
+            sentry_sdk.capture_exception(e)
+        raise HTTPException(status_code=500, detail=f"Error retrieving conversation: {str(e)}")
+
+@app.get("/conversations/search")
+async def search_conversations(
+    query: str,
+    provider: str = None,
+    start_date: str = None,
+    end_date: str = None,
+    limit: int = 10,
+    offset: int = 0
+):
+    """Search for conversations containing specific text"""
+    try:
+        conversations = await supabase_client.search_conversations(
+            query, provider, start_date, end_date, limit, offset
+        )
+        return {"conversations": conversations, "count": len(conversations)}
+    except Exception as e:
+        logger.error(f"Error searching conversations: {str(e)}")
+        if SENTRY_DSN:
+            sentry_sdk.capture_exception(e)
+        raise HTTPException(status_code=500, detail=f"Error searching conversations: {str(e)}")
+
+@app.get("/stats")
+async def get_stats():
+    """Get database statistics"""
+    try:
+        stats = await supabase_client.get_db_stats()
+        return stats
+    except Exception as e:
+        logger.error(f"Error retrieving stats: {str(e)}")
+        if SENTRY_DSN:
+            sentry_sdk.capture_exception(e)
+        raise HTTPException(status_code=500, detail=f"Error retrieving stats: {str(e)}")
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=PORT)

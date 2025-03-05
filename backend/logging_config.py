@@ -1,4 +1,6 @@
-# filepath: logging_config.py
+"""
+Logging configuration for the application.
+"""
 import logging
 import logging.handlers
 from pathlib import Path
@@ -9,6 +11,7 @@ from typing import Optional, Dict, List, Tuple, Any
 from uuid import uuid4
 from configuration import LOG_SETTINGS
 import contextvars
+import os
 
 # Create a context variable to store the request ID
 request_id_var = contextvars.ContextVar('request_id', default=None)

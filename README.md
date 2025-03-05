@@ -10,3 +10,5 @@
 update_20250305_105018_UTC+0800_seal_comet
 
 update_20250305_105322_UTC+0800_cat_orbit checking root cause of truncated issue
+
+update_20250305_121130_UTC+0800_armadillo_moon

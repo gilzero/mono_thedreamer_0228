@@ -21,12 +21,13 @@ import uuid
 # Initialize all providers
 ProviderFactory.initialize_all_providers()
 
-async def stream_response(request: ChatRequest, provider: str) -> AsyncGenerator[str, None]:
+async def stream_response(request: ChatRequest, provider: str, conversation_id: str = None) -> AsyncGenerator[str, None]:
     """Stream chat responses from an AI provider"""
     if provider not in SUPPORTED_PROVIDERS:
         raise HTTPException(status_code=400, detail=f"Provider {provider} not supported")
     
-    conversation_id = generate_conversation_id()
+    if not conversation_id:
+        conversation_id = generate_conversation_id()
     request_id = get_request_id()
     
     # Set up Sentry transaction for this request if Sentry is enabled
@@ -74,7 +75,7 @@ async def stream_response(request: ChatRequest, provider: str) -> AsyncGenerator
                     conversation_id=conversation_id,
                     request_id=request_id
                 )
-                # Log the complete conversation
+                # Log the complete conversation (legacy logging)
                 complete_response = ''.join(response_buffer)
                 log_conversation_entry(conversation_id, request.messages[-1].content, complete_response)
                 return
